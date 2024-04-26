@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 const api = require('@opentelemetry/api');
 const { getRPCMetadata, RPCType } = require('@opentelemetry/core');
 const {
@@ -21,20 +22,23 @@ const {
   getExtMetadata,
   isDirectExtInput,
   isPatchableExtMethod,
+  AttributeNames,
 } = require( './utils');
 
 /** Hapi instrumentation for OpenTelemetry */
-module.exports = class hepi extends InstrumentationBase {
-  co = 0;
+module.exports = class HEPI extends InstrumentationBase {
+  
   constructor(config) {
-    console.log("nainar super")
-    super('@nainar/instrumentation-hapi', "1", config);
+    
+    console.log('HapiInstrumentation constructor');
+    super('@nainar/instrumentation-hapi', '1', config);
   }
 
-   init() {
+  init() {
+    this.count = 0;
     return new InstrumentationNodeModuleDefinition(
       HapiComponentName,
-      ['<=21'],
+      ['<=16'],
       moduleExports => {
         if (!isWrapped(moduleExports.server)) {
           api.diag.debug('Patching Hapi.server');
@@ -49,7 +53,7 @@ module.exports = class hepi extends InstrumentationBase {
         // Function is defined at: https://github.com/hapijs/hapi/blob/main/lib/index.js#L9
         if (!isWrapped(moduleExports.Server)) {
           api.diag.debug('Patching Hapi.Server');
-          console.log('Patching Hapi.Server xx');
+          console.log('Patching Hapi.Server');
           this._wrap(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             moduleExports,
@@ -71,43 +75,43 @@ module.exports = class hepi extends InstrumentationBase {
    * the server.route, server.ext, and server.register functions via calls to the
    * @function _getServerRoutePatch, @function _getServerExtPatch, and
    * @function _getServerRegisterPatch functions
-   * @param original - the original Hapi Server creation function
+   * @param Original - the original Hapi Server creation function
    */
-  _getServerPatch(original) {
+  _getServerPatch(Original) {
     const instrumentation = this;
     const self = this;
     return function server(opts) {
-        function WrappedServer(opts) {
-          return new original(opts); // Instantiate the original Hapi.Server
-        }
+      // hapi 16 breaks without the below function
+      function WrappedServer(opts) {
+        return new Original(opts); // Instantiate the original Hapi.Server
+      }
 
-        // Create a new server instance using the wrapped constructor
-        const newServer = new WrappedServer(opts);
-        console.log("wrapping routes")
-        self._wrap(newServer, 'route', originalRouter => {
-          return instrumentation._getServerRoutePatch.bind(instrumentation)(originalRouter);
-        });
-        // Casting as any is necessary here due to multiple overloads on the Hapi.ext
-        // function, which requires supporting a variety of different parameters
-        // as extension inputs
-        console.log("wrapping ext")
-        self._wrap(newServer, 'ext', originalExtHandler => {
-            return instrumentation._getServerExtPatch.bind(instrumentation)(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            originalExtHandler);
-        });
-        // Casting as any is necessary here due to multiple overloads on the Hapi.Server.register
-        // function, which requires supporting a variety of different types of Plugin inputs
-        // console.log("wrapping register")
-
-        // self._wrap(
-        //     newServer, 
-        //     'register', 
-        //     instrumentation._getServerRegisterPatch.bind(instrumentation)
-        // );
-        return newServer;
+      // Create a new server instance using the wrapped constructor
+      const newServer = new WrappedServer(opts);
+      console.log('wrapping routes');
+      self._wrap(newServer, 'route', originalRouter => {
+        return instrumentation._getServerRoutePatch.bind(instrumentation)(originalRouter);
+      });
+      // Casting as any is necessary here due to multiple overloads on the Hapi.ext
+      // function, which requires supporting a variety of different parameters
+      // as extension inputs
+      // console.log('wrapping ext');
+      // self._wrap(newServer, 'ext', originalExtHandler => {
+      //   return instrumentation._getServerExtPatch.bind(instrumentation)(
+      //     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      //     originalExtHandler);
+      // });
+      // // Casting as any is necessary here due to multiple overloads on the Hapi.Server.register
+      // // function, which requires supporting a variety of different types of Plugin inputs
+      // console.log('wrapping register');
+      // self._wrap(
+      //   newServer, 
+      //   'register', 
+      //   instrumentation._getServerRegisterPatch.bind(instrumentation)
+      // );
+      return newServer;
     };
-}
+  }
 
   /**
    * Patches the plugin register function used by the Hapi Server. This function
@@ -116,29 +120,23 @@ module.exports = class hepi extends InstrumentationBase {
    * @param {RegisterFunction<T>} original - the original register function which
    * registers each plugin on the server
    */
-   _getServerRegisterPatch(
+  _getServerRegisterPatch(
     original
   ) {
     const instrumentation = this;
     api.diag.debug('Patching Hapi.Server register function');
     console.log('_getServerRegisterPatch');
-    return function register(
-      pluginInput,
-      options
-    ) {
-      console.log("pluginInput", pluginInput)
+    return function register(pluginInput, options, callback) {
+      if (!callback) {
+        console.log(pluginInput, 'has no callback. A new one will be added by Hapi, but may cause infinite loop');
+      }
+      console.log('pluginInput', pluginInput, options, callback);
       if (Array.isArray(pluginInput)) {
-        // for (const pluginObj of pluginInput) {
-        //   instrumentation._wrapRegisterHandler(
-        //     pluginObj.plugin?.plugin ?? pluginObj.plugin ?? pluginObj
-        //   );
-        // }
+        for (const pluginObj of pluginInput) {
+          instrumentation._wrapRegisterHandler(pluginObj);
+        }
       } else {
-        // process.exit(1)
-        // console.log("calling instrumentation._wrapRegisterHandler")
-        // instrumentation._wrapRegisterHandler(
-        //   pluginInput.register
-        // );
+        instrumentation._wrapRegisterHandler(pluginInput);
       }
       return original.apply(this, [pluginInput, options]);
     };
@@ -154,13 +152,13 @@ module.exports = class hepi extends InstrumentationBase {
    * @param {string} [pluginName] - if present, represents the name of the plugin responsible
    * for adding this server extension. Else, signifies that the extension was added directly
    */
-   _getServerExtPatch(
+  _getServerExtPatch(
     original,
     pluginName
   ) {
     const instrumentation = this;
     api.diag.debug('Patching Hapi.Server ext function');
-    console.log("_getServerExtPatch")
+    console.log('_getServerExtPatch', pluginName);
     return function ext(
       ...args
     ) {
@@ -213,13 +211,13 @@ module.exports = class hepi extends InstrumentationBase {
    * @param {string} [pluginName] - if present, represents the name of the plugin responsible
    * for adding this server route. Else, signifies that the route was added directly
    */
-   _getServerRoutePatch(
+  _getServerRoutePatch(
     original,
     pluginName
   ) {
     const instrumentation = this;
     api.diag.debug('Patching Hapi.Server route function');
-    console.log('_getServerRoutePatch', original, pluginName);
+    console.log('_getServerRoutePatch', pluginName);
     return function route(
       route
     ) {
@@ -247,19 +245,20 @@ module.exports = class hepi extends InstrumentationBase {
    * Wraps newly registered plugins to add instrumentation to the plugin's clone of
    * the original server. Specifically, wraps the server.route and server.ext functions
    * via calls to @function _getServerRoutePatch and @function _getServerExtPatch
-   * @param {Hapi.Plugin<T>} plugin - the new plugin which is being instrumented
+   * @param register - the new plugin which is being instrumented
    */
-   _wrapRegisterHandler(plugin) {
-    console.log("_wrapRegisterHandler", plugin)
+  _wrapRegisterHandler(plugin) {
+    if (!plugin.register.register?.attributes) return;
+    const register = plugin.register.register;
+    console.log('_wrapRegisterHandler', plugin);
     const instrumentation = this;
-    const pluginName = getPluginName(plugin);
-    const oldHandler = plugin.register;
+    const pluginName = getPluginName(plugin.register);
+    const oldHandler = register;
     const self = this;
-    const newRegisterHandler = function (server, options) {
+    const attributes = register.attributes;
+    const newRegisterHandler = function (server, options, next) {
       server.route;
-      console.log("_wrapRegisterHandler > before route patch")
       self._wrap(server, 'route', original => {
-        console.log("_wrapRegisterHandler > patch")
         return instrumentation._getServerRoutePatch.bind(instrumentation)(
           original,
           pluginName
@@ -276,10 +275,10 @@ module.exports = class hepi extends InstrumentationBase {
           pluginName
         );
       });
-      return oldHandler(server, options);
+      return oldHandler(server, options, next);
     };
-    plugin.register = newRegisterHandler;
-
+    plugin.register.register = newRegisterHandler;
+    plugin.register.register.attributes = attributes;
   }
 
   /**
@@ -293,11 +292,12 @@ module.exports = class hepi extends InstrumentationBase {
    * @param {string} [pluginName] - if present, represents the name of the plugin responsible
    * for adding this server route. Else, signifies that the route was added directly
    */
-   _wrapExtMethods(
+  _wrapExtMethods(
     method,
     extPoint,
     pluginName
   ){
+    console.log('_wrapExtMethods', method, extPoint, pluginName);
     const instrumentation = this;
 
     if (method instanceof Array) {
@@ -352,18 +352,17 @@ module.exports = class hepi extends InstrumentationBase {
    * @param {string} [pluginName] - if present, represents the name of the plugin responsible
    * for adding this server route. Else, signifies that the route was added directly
    */
-   _wrapRouteHandler(
+  _wrapRouteHandler(
     route,
     pluginName
-   ) {
-    console.log("_wrapRouteHandler", route, pluginName)
+  ) {
     const instrumentation = this;
     if (route[handlerPatched] === true) return route;
     route[handlerPatched] = true;
     const oldHandler = route.config?.handler ?? route.handler;
-    
+    if(route?.config?.pre) instrumentation._patchPre(route.config.pre, route)
+    console.log('_wrapRouteHandler', route, pluginName);
     if (typeof oldHandler === 'function') {
-      console.log("legit handler")
       const newHandler = async function (
         ...params
       ) {
@@ -378,7 +377,7 @@ module.exports = class hepi extends InstrumentationBase {
         const span = instrumentation.tracer.startSpan(metadata.name, {
           attributes: metadata.attributes,
         });
-        console.log("span", span)
+        console.log(span);
         try {
           return await api.context.with(
             api.trace.setSpan(api.context.active(), span),
@@ -400,7 +399,66 @@ module.exports = class hepi extends InstrumentationBase {
       } else {
         route.handler = newHandler;
       }
+    } else {
+      throw new Error(route + ' is not a valid route');
     }
     return route;
   }
-}
+  _patchPre(preArr, route) {
+    const instrumentation = this;
+    console.log("_patchPre", preArr);
+    if(Array.isArray(preArr)) {
+      preArr.forEach(preInput => {
+        if(Array.isArray(preInput)) {
+          instrumentation._patchPre(preInput, route)
+        }
+        else {
+          instrumentation._wrapPre(preInput, route)
+        }
+      });
+    }
+    else {
+      throw new Error("pre must be an array")
+    }
+  }
+  _wrapPre(preObj, route) {
+    const instrumentation = this;
+    const oldMethod = preObj.method
+    console.log({preObj})
+    const newMethod = async function (
+      ...params
+    ) {
+      if (api.trace.getSpan(api.context.active()) === undefined) {
+        return await oldHandler(...params);
+      }
+      const rpcMetadata = getRPCMetadata(api.context.active());
+      if (rpcMetadata?.type === RPCType.HTTP) {
+        rpcMetadata.route = route.path;
+      }
+
+        const metadata = getRouteMetadata(route);
+        metadata.attributes[AttributeNames.HAPI_TYPE] = "pre"
+        const span = instrumentation.tracer.startSpan("pre of " + metadata.name, {
+          attributes: metadata.attributes,
+        });
+      console.log(span)
+      try {
+        return await api.context.with(
+          api.trace.setSpan(api.context.active(), span),
+          () => oldMethod(...params)
+        );
+      } catch (err) {
+        span.recordException(err);
+        span.setStatus({
+          code: api.SpanStatusCode.ERROR,
+          message: err.message,
+        });
+        throw err;
+      } finally {
+        span.end();
+      }
+    };
+
+    preObj.method = newMethod;
+  }
+};
